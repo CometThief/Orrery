@@ -1,14 +1,16 @@
-FROM ubuntu:latest
+# Using a Conda-ready Docker image
+FROM continuumio/miniconda3:latest
 
 RUN mkdir -p /app/Orrery
 WORKDIR /app/Orrery
 
-RUN apt-get update && \
-    apt-get install -y python3 python3-rdkit python3-pip
+# Create the environment
+COPY ./environment.yml ./environment.yml
+RUN conda env create -f environment.yml
 
-RUN pip install --upgrade pip \
-    pandas \
-    requests \
-    pymongo  \
-    tqdm
+# Activate the environment
+RUN echo "source activate Orrery" > ~/.bashrc
+ENV PATH /opt/conda/envs/Orrery/bin:$PATH
 
+# Extra stuff
+RUN pip install pybel

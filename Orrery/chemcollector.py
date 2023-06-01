@@ -20,9 +20,10 @@ import bz2
 import shutil
 from rdkit import Chem
 import pickle
+from .classes import Database
 
 
-def fetch_zinc(rep="3D", since="", db_r="", format="mol2.gz",
+def fetch_zinc(rep="3D", since="", db_r="", format="smi",
                using="uri", DB_NAME = 'universe', COLLECTION='zinc20',
                all_3d_url = "https://zinc20.docking.org/tranches/all3D.json",
                download_url = "https://zinc20.docking.org/tranches/download"):
@@ -85,20 +86,14 @@ def fetch_zinc(rep="3D", since="", db_r="", format="mol2.gz",
 
     print('Downloading Zinc20 tranches...')
     for x in tqdm(r.iter_lines(), total=total):
-        print(x)
-        print(x.decode('utf-8'))
-        print('what?')
 
         if (str(x)) not in done_list:
             #getting each tranche and writing the gz file
             resp = requests.get(x)
-            print('@@: ', resp.ok)
             # for some reason some links are dead. probably internal zinc inconsistencies. this if(resp.ok) sidesteps the problem.
             if(resp.ok):
                 path = x.decode('utf-8')
                 current_file_name = os.path.join(WORKING_DIR, os.path.basename(path))
-                print(current_file_name)
-                input('stoppity')
                 with open (current_file_name, 'wb+') as f:
                     f.write(resp.content)
 
@@ -106,7 +101,7 @@ def fetch_zinc(rep="3D", since="", db_r="", format="mol2.gz",
                 with open(WORKING_DIR + '0_finished_tranches', 'a') as f:
                     f.write(str(x) + '\n')
                 
-                mapi.parse_tranche(current_file_name, DB_NAME, COLLECTION)
+                mapi.send_zinc_tranche(current_file_name, DB_NAME, COLLECTION)
 
 def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdkit_obj = True):
     """
@@ -130,19 +125,19 @@ def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdki
     base_url = 'https://www.ebi.ac.uk'
     limit = str(limit)
     url = base_url + '/chembl/api/data/molecule?limit=' + limit
-
+    chembl_db = Database(DB_NAME)
     batch = list()
     print('Processing chembl database...')
     counter = 1
     while url:
         response = requests.get(url)
         root = ET.fromstring(response.content)
-        print(f'\rParsing page "{counter}" of REAL...', end='', flush=True)
+        print(f'\rScraping page "{counter}" of REAL...', end='', flush=True)
         xml_str = response.content.decode('utf-8')
         batch = parse_xml_str(xml_str, rdkit_obj)
         counter+=1
         url = base_url + root.find('page_meta').find('next').text if root.find('page_meta').find('next') is not None else None
-        mapi.insert(DB_NAME, COLLECTION, batch)
+        chembl_db.insert(COLLECTION, batch)
         batch = list()
 
 def fetch_REAL(username = 'samuelmar@gmail.com', password = 'TCa!@wjrrH9F4Jv', directory = './temp/'):
@@ -228,7 +223,7 @@ def fetch_REAL(username = 'samuelmar@gmail.com', password = 'TCa!@wjrrH9F4Jv', d
                     for data in response.iter_content(block_size):
                         progress_bar.update(len(data))
                         file.write(data)
-                print('File {filename} downloaded successfully'.format(filename=filename))
+                print(f'File {filename} downloaded successfully')
                 progress_bar.close()
             parse_bz2(filename, directory)
             #process_REAL = multiprocessing.Process(target=parse_bz2, args=(filename,directory))
@@ -253,12 +248,9 @@ def parse_xml_str(xml_str, rdkit_obj):
     root = ET.fromstring(xml_str)
     # Create a list to hold the dictionaries
     molecules_list = []
-
     # Loop through each molecule
     for molecule in root.findall('./molecules/molecule'):
-
         molecule_dict = {}
-
         properties = molecule.find('molecule_properties')
         for prop in properties:
             if prop.text:
@@ -267,15 +259,17 @@ def parse_xml_str(xml_str, rdkit_obj):
         structures = molecule.find('molecule_structures')
         for struct in structures:
             if struct.text:
-                molecule_dict[struct.tag] = struct.text
-        if rdkit_obj:
-            rdkit_mol = Chem.MolFromSmiles(molecule_dict['canonical_smiles'])
+                if struct.tag == 'canonical_smiles': # rename the smiles column to maintain consistency with other dbs
+                    molecule_dict['smiles'] = struct.text
+                else:
+                    molecule_dict[struct.tag] = struct.text
+        if rdkit_obj and 'smiles' in molecule_dict: # this condition ignores empty molecules in the chembl db
+            rdkit_mol = Chem.MolFromSmiles(molecule_dict['smiles'])
             serialized_mol = pickle.dumps(rdkit_mol)
             # de-pickling:
             #rdkit_mol = pickle.loads(serialized_mol)
             molecule_dict['pickled_rdkit_object'] = serialized_mol
-
-        molecules_list.append(molecule_dict)
+            molecules_list.append(molecule_dict)
 
     return molecules_list
 
@@ -295,7 +289,7 @@ def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', re
     Returns:
     None.
     """
-
+    working_db = Database(DB_NAME)
     batch = []
     print(f"Moving '{filename}' to local database")
     with bz2.open(filename, 'rt') as file:
@@ -310,9 +304,9 @@ def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', re
                 molecule = dict(zip(keys, values))
                 batch.append(molecule)
                 if len(batch) >= max_batch_size:
-                    mapi.insert(DB_NAME, COLLECTION, batch)
+                    working_db.insert(COLLECTION, batch)
                     batch = []
-                    input('continue?')
+
     #counter = 1
     #microbatch = []
     #for document in batch:

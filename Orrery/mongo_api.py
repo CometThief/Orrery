@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 import numpy as np
 import time
 from collections import defaultdict
-from Orrery.classes import mol2
+from Orrery.classes import Molecule, Database
 import gzip
 
 #DOMAIN = '172.20.0.2'
@@ -24,54 +24,6 @@ client = MongoClient(
 
 #print(client.server_info())
 
-def insert(DB, COLLECTION, documents):
-
-    """
-    Inserts multiple documents into a specified database / collection in MongoDB.
-
-    Args:
-        DB (str): The name of the database.
-        COLLECTION (str): The name of the collection.
-        documents (List[dict]): A list of documents to insert.
-
-    Returns:
-        pymongo.results.InsertManyResult: Object with details of the insert operation.
-    """
-
-    DB = client[DB]
-    COLLECTION = DB[COLLECTION]
-    inserted = COLLECTION.insert_many(documents)
-    return inserted
-
-def destroy(DB):
-
-    """
-    Drops a specified database from MongoDB.
-
-    Args:
-        DB (str): The name of the database to drop.
-    """
-
-    client.drop_database(DB)
-
-def rm_collection(DB, COLLECTION):
-
-    """
-    Drops a specified collection from a specified database in MongoDB.
-
-    Args:
-        DB (str): The name of the database.
-        COLLECTION (str): The name of the collection to drop.
-
-    Returns:
-        bool: True if collection dropped successfully, else False.
-    """
-
-    DB = client[DB]
-    COLLECTION = DB[COLLECTION]
-    deleted = COLLECTION.drop()
-    return deleted
-
 def see(DB = None, COLLECTION = None):
     
     """
@@ -80,25 +32,28 @@ def see(DB = None, COLLECTION = None):
     Args:
         DB (str, optional): The name of the database. If None, list of databases will be printed.
         COLLECTION (str, optional): The name of the collection. If None, list of collections in the DB will be printed.
+                                    Otherwise the contents of the table will be printed and returned as a df.
 
     Returns:
         pd.DataFrame: DataFrame representation of documents if DB and COLLECTION are both specified, else None.
     """
     
     col_df = None
-
     if DB != None:
         dbname = DB
         DB = client[DB]
 
+    # table contents request 
     if (DB != None) and (COLLECTION != None):
         collection = DB[COLLECTION]
         all = collection.find({}, {'_id': False})
         col_df = pd.DataFrame(all)
-
         print('\nTotal number of documents in ({collection}): {amount}'.format(
             collection=COLLECTION, amount=collection.count_documents({})) )
+        print(col_df)
+        return col_df
 
+    # list of tables within db request
     elif (DB != None) and (COLLECTION == None):
         print('\nCollections in {}:\n'.format(dbname))
         allcollections = DB.list_collection_names()
@@ -106,101 +61,59 @@ def see(DB = None, COLLECTION = None):
             print(x)
         print('\n')
 
+    # list of dbs request
     else:
         print('\n')
         for db in client.list_databases():
             print(str(db)[1:-1])
         print('\n')
 
-    if col_df: print(col_df)
-    return col_df
-
-def parse_tranche(tranche, DB_NAME='universe', COLLECTION = 'smiles ' + time.strftime("%Y%m%d-%H%M%S")):
+def send_zinc_tranche(tranche, DB_NAME='universe', COLLECTION = 'zinc20'):
 
     """
-    This function takes tranche files from zinc20 and parses them. Any new filetypes must be implemented.
+    This function takes tranche files from zinc20 and parses them then sends them to Mongo.
+    Any new filetypes must be implemented.
 
-    Filetypes accepted so far: 
-    .mol2.gz
-    """
-    batch = {}
-    
-    # parsing many-molecule data from .mol2.gz files
-    if tranche.endswith('mol2.gz'):
-        with gzip.open(tranche, 'rt') as file:
-            mol_string = file.read()
-        molecules = []
-        mol_data = mol_string.split('@<TRIPOS>MOLECULE')
-        for data in mol_data[1:]:
-            molecule = mol2('@<TRIPOS>MOLECULE' + data)
-            molecules.append(molecule)
-        for mol in molecules:
-            print(mol)
-            print(mol.sections)
-            print(mol.mol_string)
-            input('heee')
-            #batch.update()
-    else:
-        __, file_extension = os.path.splitext(tranche)
-        print('Unsupported file type: {file_extension}')
-        pass
+    Default schema used:
 
-    # here one might add other parsing conditions for other file extensions
-    print(molecules)
-
-
-    
-    '''
-    else:
-        print(f"The smiles directory is empty. Attemps left: '{maxemptyiterations - iterations}'")
-        iterations += 1
-        time.sleep(5)
-    else:
-        for i in allfiles:
-            tranche = i[-10:]
-            with open(i, 'r') as file:
-                for e in file:
-                    #this should be generalized with regex to be able to handle more file types (?)
-                    #only works with zinc15 smiles files as is
-                    if not e.startswith('smiles'):
-                        smiles_chain = e.split()[0]
-                        zinc_id = e.split()[1]
-                        mol = Chem.MolFromSmiles(smiles_chain)
-
-                        #distance matrix stuff
-                        distmatrix = molDG.GetMoleculeBoundsMatrix(mol)
-                        maxdist = np.max(distmatrix)
-
-                        #atoms present in molecule by atomic number
-                        atomic_count = defaultdict(lambda : 0)
-                        for atom in mol.GetAtoms():
-                            atomic_count[atom.GetAtomicNum()] += 1
-                        atomspresent = [i for i in atomic_count if atomic_count[i]!=atomic_count.default_factory()]
-
-                        document = {
+    document = {
                             'smiles_chain' : smiles_chain,
                             'zinc_id' : zinc_id,
                             'tranche' : tranche,
-                            'maxdist' : maxdist,
                             'atomspresent' : atomspresent
                         }
-                        batch.append(document)
-                        counter += 1
-            iterations = 0
-            #print('Finished tranche: {ctranche}'.format(ctranche=i))
-            os.remove(i)
-            to_remove.append(i)
 
-        if to_remove:
-            for i in to_remove:
-                allfiles.remove(i)
-        to_remove = list()
+    Filetypes accepted so far: 
+    .smi
+    """
+    
+    batch = []
+    working_db = Database(DB_NAME)
+    
+    # parsing many-molecule data from .smi files
+    if tranche.endswith('smi'):
+        # organize the molecules in a single tranche
+        with open(tranche, 'rt') as file:
+            tranche_string = file.read()
+        lines = tranche_string.strip().split('\n')
 
-        # decided to place this inside the loop so many mini batches are inserted instead of one large one, this could be a mistake       
-        if batch:
-            insert(DB_NAME, COLLECTION, batch)
-            batch = list()
-        '''
+        #
+        for line in lines[1:]:
+            smiles, zinc_id = line.split()
+            mol = Molecule(smiles, zinc_id)
+            document = {
+                            'smiles' : smiles,
+                            'mol2' : mol.mol2,
+                            'zinc_id' : zinc_id
+                        }
+            batch.append(document)
+    else:
+        __, file_extension = os.path.splitext(tranche)
+        print(f'Unsupported file type: {file_extension}')
+        pass
+
+    working_db.insert(COLLECTION, batch)
+
 def subsearch(DB_NAME, COLLECTION, substructs = pd.DataFrame(
         {
             'name': ['carbonyl'],
@@ -222,43 +135,24 @@ def subsearch(DB_NAME, COLLECTION, substructs = pd.DataFrame(
     if not newname:
         newname = 'subsearch ' + time.strftime("%Y%m%d-%H%M%S")
 
+    working_db = Database(DB_NAME)
     substructs['rdkit molecule'] = substructs['smiles'].apply(Chem.MolFromSmiles)
-
-    #mols = list(substructs['rdkit molecule'])
-    #names = list(substructs['name'])
-    #output image with substructures?
-    #Chem.Draw.MolsToGridImage(
-    # mols,
-    # legends=name
-    # molsPerRow=5
-    # )
-
     col = see(DB_NAME, COLLECTION)
     matches = []
-    #no_matches = []
 
     for index, row in tqdm(col.iterrows(), total=col.shape[0]):
-        mol = Chem.MolFromSmiles(row['smiles_chain'])
+        mol = Chem.MolFromSmiles(row['smiles'])
         match = False
         substructmatches = list()
         for _, substruct in substructs.iterrows():
-            if mol.HasSubstructMatch(substruct['rdkit molecule']):
-                substructmatches.append(substruct['name'])
-                '''
-                matches.append(
-                    {
-                        'zinc_id': row['zinc_id'],
-                        'smiles_chain': row['smiles_chain'],
-                        'substructure match': substruct['name']
-                    }
-                )
-                '''
-                match = True
+            if mol:
+                if mol.HasSubstructMatch(substruct['rdkit molecule']):
+                    substructmatches.append(substruct['name'])
+                    match = True
         if match == True:
             matches.append(
                     {
-                        'zinc_id': row['zinc_id'],
-                        'smiles_chain': row['smiles_chain'],
+                        'smiles': row['smiles'],
                         'substructure match': substructmatches
                     }
                 )
@@ -272,7 +166,7 @@ def subsearch(DB_NAME, COLLECTION, substructs = pd.DataFrame(
                        ):
             print(matches)
     elif matches:
-        insert(DB_NAME, newname, matches)
+        working_db.insert(newname, matches)
         matches=pd.DataFrame(matches)
         #no_matches=pd.DataFrame(no_matches)
         print('{0} molecules match the filters'.format(len(matches)))
@@ -280,7 +174,7 @@ def subsearch(DB_NAME, COLLECTION, substructs = pd.DataFrame(
     else:
         print('\nNo values matched the filters\n')
 
-
+# UNDER MAINTENANCE
 def sizefilter(DB_NAME, COLLECTION, min = 3, max = 7, newname = None):
 
     """
@@ -313,7 +207,7 @@ def sizefilter(DB_NAME, COLLECTION, min = 3, max = 7, newname = None):
     print('Total number of molecules that fit the size criteria: ', len(filtered))
 
 
-def atomfilter(DB_NAME, COLLECTION, contains, newname = None):
+def atomfilter(DB_NAME, COLLECTION, contains = [7, 17], newname = None):
     #, exclude=range(min,max)
 
     """
@@ -325,8 +219,7 @@ def atomfilter(DB_NAME, COLLECTION, contains, newname = None):
         contains (List[int]): List of atomic numbers that must be present in a molecule.
         newname (str, optional): Name of the new collection to insert filtered molecules. Defaults to formatted string with contains, COLLECTION, and date.
     """
-
-    db = client[DB_NAME]
+    working_db = Database(DB_NAME)
     collection = db[COLLECTION]
     if not newname:
         newname = '{contains} Atom filter from ({COLLECTION})  {DATE}'.format(
