@@ -56,7 +56,22 @@ def main():
         input('inin')
     '''
     
+    ### adding scaffolds
+    #wdb = Database('universe')
+    #wdb.explore()
+    #wdb.add_scaffold_column('chembl')
+    #print(see('universe', 'chembl')['scaffold'])
+    #wdb.explore()
     
+    ### scaffold searching
+    wdb = Database('universe')
+    a = see('universe', 'chembl_20230623175930')
+    print(a)
+    #cursor = wdb.scaffold_search('chembl', 'Cc1cc(-n2ncc(=O)[nH]c2=O)ccc1C(=O)c1ccccc1Cl')
+
+    #for x in cursor:
+        #print(x)
+        #input('hehe')
 
     ### subsearching - searches for C=O by default
 

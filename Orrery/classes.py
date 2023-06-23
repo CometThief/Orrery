@@ -3,12 +3,23 @@
 import pandas as pd
 from pymongo import MongoClient, errors
 from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import AllChem
 from openbabel import openbabel
 import pybel
 import logging
 from datetime import datetime
 import math
+
+def compute_scaffold(smiles):
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        scaffold_smiles = Chem.MolToSmiles(scaffold)
+        return scaffold_smiles
+    except Exception as e:
+        print(f"Failed to compute scaffold for SMILES {smiles}: {e}")
+        return math.nan
 
 class Molecule:
     def __init__(self, smiles, id=None):
@@ -100,7 +111,7 @@ class Database:
     def explore(self, show=True):
         collections_info = {}
         collections = self.DB.list_collection_names()
-
+        print("\n--- Collections Information ---")
         for collection_name in collections:
             collection = self.DB[collection_name]
             collection_info = {}
@@ -110,13 +121,19 @@ class Database:
                     column_type = type(value).__name__
                     collection_info[column] = column_type
 
+            index_info = collection.index_information()
+            indexed_columns = [index['key'][0][0] for index in index_info.values() if index['key'][0][0] != '_id']
+            collection_info['indexed_columns'] = indexed_columns if indexed_columns else 'No indexed columns'
+
             collections_info[collection_name] = collection_info
             if show:
-                print("\n--- Collection Information ---")
                 for collection, info in collections_info.items():
                     print(f"\n\nCollection: {collection}\n")
                     for column, data_type in info.items():
-                        print(f"{column}\tData Type: {data_type}")
+                        if column == 'indexed_columns':
+                            print(f"{column}: {data_type}")
+                        else:
+                            print(f"{column}\tData Type: {data_type}")
 
         return collections_info
 
@@ -166,6 +183,40 @@ class Database:
         ]
         collection.aggregate(pipeline)
 
+    def add_scaffold_column(self, collection, index = True):
+        collection = self.DB[collection]
+        documents = collection.find()
+        
+        for document in documents:
+            smiles = document["smiles"]
+            scaffold_smiles = compute_scaffold(smiles)
+            collection.update_one({"_id": document["_id"]}, {"$set": {"scaffold": scaffold_smiles}})
+        
+        if index: collection.create_index("scaffold")
+
+    def scaffold_search(self, collection_name, smiles, store_results=True):
+        
+        # Make sure the 'scaffold' column exists
+        if 'scaffold' not in self.explore(show=False)[collection_name]:
+            self.add_scaffold_column(collection_name)
+        
+        query_scaffold = compute_scaffold(smiles)
+        if query_scaffold is None:
+            print(f"Failed to compute scaffold for SMILES: {smiles}")
+            return
+
+        query = {"scaffold": query_scaffold}
+        collection = self.DB[collection_name]
+        results = collection.find(query)
+        
+        if store_results:
+            new_collection_name = collection_name + '_' + datetime.now().strftime('%Y%m%d%H%M%S')
+            new_collection = self.DB[new_collection_name]
+            new_collection.insert_many(results)
+            return new_collection_name
+        else: # this else condition turns the function into a generator
+            for document in results:
+                yield document
 
     def destroy(self):
         self.client.drop_database(self.name)
@@ -193,6 +244,8 @@ class Database:
         except OperationFailure as err:
             logging.error(f"Error dropping collection {self.name}.{collection_name}: {err}")
             raise
+
+
 
 '''
 class Database:
