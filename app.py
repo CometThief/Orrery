@@ -28,9 +28,9 @@ def Abaddon(database = 'universe'):
 def main():
     ''''''
     ##### some tests
-
     ### cloning a db locally
-    #fetch_zinc()
+    #Abaddon('universe')
+    #fetch_chembl()
     #fetch_chembl()
     #fetch_REAL()
     #fetch_all()
@@ -38,8 +38,25 @@ def main():
     ### see() usage
     #see() # list all databases
     #see('universe') # list all collections in 'universe' db
-    #see('universe', 'REAL') # visualize a df containing the collection 'REAL' which is inside the 'universe' db
-    #realdf = see('universe', 'REAL') # save the df to be used later
+    #see('universe', 'chembl') # visualize a df containing the collection 'REAL' which is inside the 'universe' db
+    #realdf = see('universe', 'chembl') # save the df to be used later
+    #print(realdf.head(20))
+
+
+    # common querying
+    '''
+    wdb = Database('universe')
+    wdb.explore()
+    wdb.convert_collection_column('chembl', 'alogp', 'double')
+    results = wdb.query('chembl', {'alogp':{'$gt':2.1}}, store_results = False)
+    wdb.explore()
+    print(see('universe', 'chembl').head(10))
+    for x in results:
+        print(x)
+        input('inin')
+    '''
+    
+    
 
     ### subsearching - searches for C=O by default
 

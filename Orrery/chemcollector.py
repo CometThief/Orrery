@@ -8,6 +8,7 @@ The chemcollector module relies on the requests, pandas, tqdm, xml, pickle, and 
 
 from re import L
 import requests
+import math
 import os
 from tqdm import tqdm
 from . import mongo_api as mapi

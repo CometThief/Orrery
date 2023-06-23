@@ -7,6 +7,8 @@ from rdkit.Chem import AllChem
 from openbabel import openbabel
 import pybel
 import logging
+from datetime import datetime
+import math
 
 class Molecule:
     def __init__(self, smiles, id=None):
@@ -95,6 +97,76 @@ class Database:
             #print(e.details['writeErrors'])
             ''
 
+    def explore(self, show=True):
+        collections_info = {}
+        collections = self.DB.list_collection_names()
+
+        for collection_name in collections:
+            collection = self.DB[collection_name]
+            collection_info = {}
+            columns = collection.find_one()
+            if columns:
+                for column, value in columns.items():
+                    column_type = type(value).__name__
+                    collection_info[column] = column_type
+
+            collections_info[collection_name] = collection_info
+            if show:
+                print("\n--- Collection Information ---")
+                for collection, info in collections_info.items():
+                    print(f"\n\nCollection: {collection}\n")
+                    for column, data_type in info.items():
+                        print(f"{column}\tData Type: {data_type}")
+
+        return collections_info
+
+    def query(self, collection_name, query, store_results=True):
+        collection = self.DB[collection_name]
+        results = collection.find(query)
+        
+        if store_results:
+            new_collection_name = collection_name + '_' + datetime.now().strftime('%Y%m%d%H%M%S')
+            new_collection = self.DB[new_collection_name]
+            new_collection.insert_many(results)
+            return new_collection_name
+        else:
+            return results
+
+    def convert_collection_column(self, collection_name, column_name, type_str, onError = None):
+        '''
+        Method to convert an entire column in a mongo collection a certain data type.
+
+        To convert to floats, pass the argument 'double' instead of 'float'.
+
+        If conversion fails, original entry will be kept by default.
+
+        To convert a float stored as a str to int, it's necessary to convert to 'double' first then to 'int'.
+        '''
+        if not onError: onError = f"${column_name}"
+        collection = self.DB[collection_name]
+
+        pipeline = [
+            {
+                "$addFields": {
+                    column_name: {
+                        "$ifNull": [
+                            {
+                                "$convert": {
+                                    "input": f"${column_name}",
+                                    "to": type_str,
+                                    "onError": onError  # keep original value if conversion fails
+                                }
+                            },
+                            f"${column_name}"  # if field does not exist, keep it as null
+                        ]
+                    }
+                }
+            },
+            {"$out": collection_name},
+        ]
+        collection.aggregate(pipeline)
+
+
     def destroy(self):
         self.client.drop_database(self.name)
 
@@ -149,3 +221,6 @@ class Collection:
     def check_duplicate(self, key):
         print(f"Checking for duplicates in {self.collection_name} in {self.db_name} database with key {key}.")
 '''
+
+#working_db = Database('hola')
+#working_db.substruct()
