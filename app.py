@@ -56,6 +56,12 @@ def main():
         input('inin')
     '''
     
+    ### adding mol2 conversion
+    wdb = Database('universe')
+    see('universe','chembl')
+    wdb.convert_smi_to_mol2('chembl')
+    see('universe','chembl')
+
     ### adding scaffolds
     #wdb = Database('universe')
     #wdb.explore()
@@ -64,9 +70,9 @@ def main():
     #wdb.explore()
     
     ### scaffold searching
-    wdb = Database('universe')
-    a = see('universe', 'chembl_20230623175930')
-    print(a)
+    #wdb = Database('universe')
+    #a = see('universe', 'chembl_20230623175930')
+    #print(a)
     #cursor = wdb.scaffold_search('chembl', 'Cc1cc(-n2ncc(=O)[nH]c2=O)ccc1C(=O)c1ccccc1Cl')
 
     #for x in cursor:

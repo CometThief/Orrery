@@ -8,7 +8,7 @@ services:
   python:
     container_name: 'python'
     build:
-      context: .
+      context: ./docker_files/python/
     volumes:
       - ..:/app
     tty: true
@@ -27,4 +27,15 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=unam
       - MONGO_INITDB_ROOT_PASSWORD=12345
     networks:
+      - my_network
+
+  openbabel:
+      container_name: 'openbabel'
+      build:
+       context: ./docker_files/openbabel/
+      volumes:
+      - ..:/app
+      tty: true
+      command: python ./Orrery/babel_server.py
+      networks:
       - my_network

@@ -10,6 +10,7 @@ import pybel
 import logging
 from datetime import datetime
 import math
+import requests
 
 def compute_scaffold(smiles):
     try:
@@ -217,6 +218,32 @@ class Database:
         else: # this else condition turns the function into a generator
             for document in results:
                 yield document
+
+    def convert_smi_to_mol2(self, collection_name):
+        # Check if collection exists
+        if collection_name not in self.DB.list_collection_names():
+            raise ValueError(f"Collection '{collection_name}' does not exist in the database.")
+
+        # Check if 'smiles' field exists in the collection
+        if "smiles" not in self.explore(show=False)[collection_name]:
+            raise ValueError(f"Collection '{collection_name}' does not contain a 'smiles' field.")
+
+        collection = self.DB[collection_name]
+        documents = collection.find()
+        
+        for document in documents:
+            smiles = document["smiles"]
+            # Call the /smi_to_mol2 route on the Open Babel server with the SMILES string
+            response = requests.post('http://openbabel:5000/smi_to_mol2', json={"smiles": smiles})
+            
+            if response.status_code == 200:
+                # Successful conversion, add new 'mol2' field to document
+                mol2 = response.text
+            else:
+                print(f"Error converting SMILES to Mol2 for document with _id {document['_id']}: {response.text}")
+                mol2 = None  # set mol2 to None if conversion fails
+
+            collection.update_one({"_id": document["_id"]}, {"$set": {"mol2": mol2}})
 
     def destroy(self):
         self.client.drop_database(self.name)
