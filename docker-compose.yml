@@ -28,14 +28,3 @@ services:
       - MONGO_INITDB_ROOT_PASSWORD=12345
     networks:
       - my_network
-
-  openbabel:
-      container_name: 'openbabel'
-      build:
-       context: ./docker_files/openbabel/
-      volumes:
-      - ..:/app
-      tty: true
-      command: python ./Orrery/babel_server.py
-      networks:
-      - my_network

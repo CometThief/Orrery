@@ -1,6 +1,6 @@
 from Orrery.chemcollector import fetch_zinc, fetch_chembl, fetch_REAL
 from Orrery.mongo_api import see, subsearch
-from Orrery.classes import Database
+from Orrery.classes import Database, Molecule
 #import smiles_gaussian
 import pandas as pd
 import time
@@ -26,16 +26,30 @@ def Abaddon(database = 'universe'):
     goodbye.destroy()
 
 def main():
-    ''''''
-    ##### some tests
-    ### cloning a db locally
-    #Abaddon('universe')
-    #fetch_chembl()
-    #fetch_chembl()
-    #fetch_REAL()
-    #fetch_all()
 
-    ### see() usage
+    ################################
+    ##### cloning a db locally #####
+    ################################
+
+    
+    '''
+    # clean existing db
+    Abaddon('universe')
+    # individual fetching - would refetching be equivalent to updating?
+    fetch_chembl()
+    fetch_chembl()
+    fetch_REAL()
+    
+    # grouped fetching
+    fetch_all()
+    '''
+
+
+    #######################
+    ##### see() usage #####
+    #######################
+
+
     #see() # list all databases
     #see('universe') # list all collections in 'universe' db
     #see('universe', 'chembl') # visualize a df containing the collection 'REAL' which is inside the 'universe' db
@@ -43,60 +57,49 @@ def main():
     #print(realdf.head(20))
 
 
-    # common querying
+    
+    ###########################
+    ##### common querying #####
+    ###########################
+
+
     '''
+    # this is an example of how to implement basic querying, it needs to be heavily refined
+    # this syntax is specific to mongo
     wdb = Database('universe')
+    # .explore() prints out a bunch of information about the table being accessed
     wdb.explore()
+    # convert the column from string to double
     wdb.convert_collection_column('chembl', 'alogp', 'double')
+    # filter by all values of alogp greater than 2.1
     results = wdb.query('chembl', {'alogp':{'$gt':2.1}}, store_results = False)
-    wdb.explore()
-    print(see('universe', 'chembl').head(10))
     for x in results:
         print(x)
-        input('inin')
     '''
     
-    ### adding mol2 conversion
-    wdb = Database('universe')
-    see('universe','chembl')
-    wdb.convert_smi_to_mol2('chembl')
-    see('universe','chembl')
-
-    ### adding scaffolds
-    #wdb = Database('universe')
-    #wdb.explore()
-    #wdb.add_scaffold_column('chembl')
-    #print(see('universe', 'chembl')['scaffold'])
-    #wdb.explore()
     
-    ### scaffold searching
-    #wdb = Database('universe')
-    #a = see('universe', 'chembl_20230623175930')
-    #print(a)
-    #cursor = wdb.scaffold_search('chembl', 'Cc1cc(-n2ncc(=O)[nH]c2=O)ccc1C(=O)c1ccccc1Cl')
+    ####################################
+    ##### minimal qvina processing #####
+    ####################################
 
-    #for x in cursor:
-        #print(x)
-        #input('hehe')
 
-    ### subsearching - searches for C=O by default
+    # clean the db first  then fetch 1 single item
+    #Abaddon('universe')
+    #fetch_chembl(limit=1, max_pages=1)
+    
+    # generate a mol2 column that is ph-adjusted by default
+    working_db = Database('universe')
+    print(f'---Converting the smiles column from the chembl collection to a dict of pH-adjusted mol2 files---')
+    working_db.convert_smiles_to_mol2('chembl')
+    print(f'---Converting the pH_n columns to qvina outputs---')
+    working_db.basic_qvina_analysis_timed('chembl')
 
-    # dict struct for subsearching:
-    '''
-    {
-            'name': ['carbonyl'],
-            'smiles': ['C=O']
-        }
-    '''
-
-    #subsearch('universe', 'chembl')
-    #subsearch('universe', 'REAL')
-    #subsearch('universe', 'zinc20')
-
-    ### destroy a db
-    #Abaddon()
-    #input('see')
-
+    # quick and dirty dataframe testing - not recommended for large datasets
+    chembl_df = see('universe','chembl')
+    single_item = chembl_df['qvina_output'][0]
+    for pH, qvina_file in single_item.items():
+        print(f'pH {pH}:\n{qvina_file}\n\n')
     
 if __name__ == "__main__":
     main()
+    

@@ -49,9 +49,13 @@ def fetch_zinc(rep="3D", since="", db_r="", format="smi",
     COLLECTION : str, optional
         Name of the MongoDB collection to load data into, by default 'zinc20'.
 
+    Example
+    -------
+    fetch_zinc(DB_NAME="mydatabase", COLLECTION="mycollection")
+
     Notes
     -----
-    This function fetches data using tranches. To keep track of the progress, a list of finished tranches is maintained.
+    This function fetches data downloading individual Zinc tranches. To keep track of the progress, a list of finished tranches is maintained.
     """
 
     r = requests.get(all_3d_url)
@@ -104,9 +108,10 @@ def fetch_zinc(rep="3D", since="", db_r="", format="smi",
                 
                 mapi.send_zinc_tranche(current_file_name, DB_NAME, COLLECTION)
 
-def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdkit_obj = True):
+def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdkit_obj = True, max_pages = None):
     """
     Fetches a specified number of molecules from the ChEMBL database and loads the data into a MongoDB collection.
+    Fetches a certain amount of molecules per a page for a certain amount of pages.
 
     Parameters
     ----------
@@ -115,9 +120,16 @@ def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdki
     COLLECTION : str, optional
         Name of the MongoDB collection to load data into, by default 'chembl'.
     limit : int, optional
-        Number of molecules to fetch, by default 1000.
+        Number of molecules to fetch per page, by default 1000.
     rdkit_obj : bool, optional
         Whether to convert molecular structures into RDKit object and include them in the data, by default True.
+    max_pages : int, optional
+        Maximum number of pages to scrape. If not provided or None, all pages are scraped.
+
+    Example
+    -------
+    fetch_chembl(DB_NAME="mydatabase", COLLECTION="mycollection", limit=500, max_pages=5)
+
     """
 
     # TO DO: stop/restart where left off; dupe protection
@@ -131,6 +143,8 @@ def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdki
     print('Processing chembl database...')
     counter = 1
     while url:
+        if max_pages is not None and counter > max_pages:
+            break
         response = requests.get(url)
         root = ET.fromstring(response.content)
         print(f'\rScraping page "{counter}" of REAL...', end='', flush=True)
@@ -143,7 +157,7 @@ def fetch_chembl(DB_NAME = 'universe', COLLECTION = 'chembl', limit = 1000, rdki
 
 def fetch_REAL(username = 'samuelmar@gmail.com', password = 'TCa!@wjrrH9F4Jv', directory = './temp/'):
     
-    """
+    """"
     Downloads the Enamine REAL database, unzips the files, and loads the data into a MongoDB collection.
 
     Parameters
@@ -154,6 +168,10 @@ def fetch_REAL(username = 'samuelmar@gmail.com', password = 'TCa!@wjrrH9F4Jv', d
         Password for the Enamine account, by default 'TCa!@wjrrH9F4Jv'.
     directory : str, optional
         Directory to store the downloaded files, by default './temp/'.
+
+    Example
+    -------
+    fetch_REAL(username='yourusername', password='yourpassword', directory='./yourdirectory/')
 
     Notes
     -----
@@ -244,6 +262,11 @@ def parse_xml_str(xml_str, rdkit_obj):
 
     Returns:
     list: A list of dictionaries, where each dictionary represents a molecule with its properties and structures.
+
+    Example
+    -------
+    molecules = parse_xml_str(your_xml_string, rdkit_obj=True)
+
     """
 
     root = ET.fromstring(xml_str)
@@ -275,21 +298,30 @@ def parse_xml_str(xml_str, rdkit_obj):
     return molecules_list
 
 def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', remove = True, max_batch_size = 1000):
-
     """
     This function reads a bz2 file, parses its contents, and stores the data in a MongoDB database.
 
     Args:
-    filename (str): The path to the bz2 file to be parsed.
-    directory (str): The directory where the parsed file will be stored.
-    DB_NAME (str, optional): The name of the MongoDB database where the data will be stored. Defaults to 'universe'.
-    COLLECTION (str, optional): The name of the MongoDB collection where the data will be stored. Defaults to 'REAL'.
-    remove (bool, optional): Whether to remove the original bz2 file after it's been parsed and the data has been stored. Defaults to True.
-    max_batch_size (int, optional): The maximum number of documents to be inserted into the database in a single batch. Defaults to 1000.
+    filename (str): The path of the bz2 file.
+    directory (str): The directory to store the extracted data.
+    DB_NAME (str): The name of the MongoDB database, default is 'universe'.
+    COLLECTION (str): The name of the MongoDB collection, default is 'REAL'.
+        remove (bool): Whether to remove the bz2 file after extraction, default is True.
+    max_batch_size (int): The maximum number of molecules to include in each insert operation, default is 1000.
 
     Returns:
-    None.
+    None
+
+    Example
+    -------
+    parse_bz2(filename="yourfile.bz2", directory="./yourdirectory/", DB_NAME="mydatabase", COLLECTION="mycollection", remove=False, max_batch_size=500)
+
+    Notes
+    -----
+    This function should probably only handle the bz2 file and the actual writing to mongo should be done elsewhere.
+    This function reads a bz2 file, which typically contains a large amount of data. It also uses a batch insertion method to efficiently load data into the MongoDB database.
     """
+
     working_db = Database(DB_NAME)
     batch = []
     print(f"Moving '{filename}' to local database")
@@ -308,19 +340,6 @@ def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', re
                     working_db.insert(COLLECTION, batch)
                     batch = []
 
-    #counter = 1
-    #microbatch = []
-    #for document in batch:
-    #    microbatch.append(document)
-    #    if len(batch) >= max_batch_size:
-    #        print(f'Microbatch: "{counter}"')
-    #        counter +=1
-    #        print(microbatch)
-    #        input('continue?')
-    #        mapi.insert(DB_NAME, COLLECTION, batch)
-    #        batch = []
-    #mapi.insert(DB_NAME, COLLECTION, batch)
-
     finished_files_path = directory + 'finished_files'
     with open(finished_files_path, 'a') as f:
         f.write(filename + '\n')
@@ -328,69 +347,3 @@ def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', re
     if remove:
         os.remove(filename)
         
-'''
-def process_chunk(chunk, keys):
-    batch = []
-    for line in chunk.split("\n"):
-        values = line.strip().split("\t")
-        molecule = dict(zip(keys, values))
-        batch.append(molecule)
-    return batch
-
-def parse_bz2(filename, directory, DB_NAME='universe', COLLECTION='REAL', remove=True, batch_size = 100):
-    batch = []
-    print(f"Moving '{filename}' to local database")
-    with bz2.open(filename, 'rt') as file:
-        print('1')
-        keys = file.readline().strip().split("\t")
-        print('2')
-        file_size = os.path.getsize(filename)
-        print('3')
-        chunk_size = 1024 * 1024 # 1 MB
-        print('4')
-        num_chunks = file_size // chunk_size + 1
-        print('5')
-
-        # Create a pool of worker processes
-        print('6')
-        pool = multiprocessing.Pool()
-
-        # Process each chunk in parallel using the pool
-        results = []
-        for i in range(num_chunks):
-            print('7')
-            chunk = file.read(chunk_size)
-            if chunk:
-                print('chunk', i)
-                result = pool.apply_async(process_chunk, (chunk, keys))
-                results.append(result)
-
-        # Collect the results from the pool
-        #for result in results:
-            #batch.extend(result.get())
-        
-        # Collect the results from the pool
-    counter = 1
-    for result in results:
-        print(f'Microbatch: "{counter}"')
-        counter +=1
-        batch.extend(result.get())
-        if len(batch) >= batch_size:
-            mapi.insert(DB_NAME, COLLECTION, batch)
-            batch = []
-    
-    # Insert any remaining documents
-    if batch:
-        mapi.insert(DB_NAME, COLLECTION, batch)
-
-    #mapi.insert(DB_NAME, COLLECTION, batch)
-
-    
-
-    finished_files_path = directory + 'finished_files'
-    with open(finished_files_path, 'a') as f:
-        f.write(filename + '\n')
-    print(f'Finished moving {filename} to local database')
-    if remove:
-        os.remove(filename)
-'''
