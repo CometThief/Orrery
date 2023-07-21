@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy files into the container
 COPY ./environment.yml ./environment.yml
-COPY ./installer_files/mgltools_x86_64Linux2_1.5.7.tar ./installer_files/
+#COPY ./installer_files/mgltools_x86_64Linux2_1.5.7.tar ./installer_files/
 
 # Create the Python 3 environment
 RUN conda config --add channels defaults \
