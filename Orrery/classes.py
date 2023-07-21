@@ -7,7 +7,10 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import AllChem, rdmolops
 from openbabel import openbabel
 from openbabel import pybel
+import pkasolver
+from pkasolver.query import calculate_microstate_pka_values
 import logging
+import pickle
 from datetime import datetime
 import math
 import requests
@@ -90,9 +93,10 @@ class Molecule:
         self.input_data = input_data
         if self.input_data is None:
             self.mol2 = self._get_mol2()
-            self.sections = self._parse_mol2()
+            
         else:
             self.mol2 = self.convert_format('mol2', input_data=self.input_data)
+        self.sections = self._parse_mol2()
         self.dict = self.to_dict()
 
     def _get_mol2(self, pHs=None):
@@ -204,18 +208,14 @@ class Database:
     def __init__(self, name, host = 'mongo_db', port = 27017,
                  username = 'unam', password = '12345'):
         self.name = name
-        try:
-            self.client = MongoClient(
-                   host = host,
-                port = port,
-                serverSelectionTimeoutMS = 3000, # 3 second timeout
-                username = username,
-                password = password,
-            )
-            self.client.server_info()  # Trigger ServerSelectionTimeoutError if cannot connect to MongoDB server
-        except ServerSelectionTimeoutError as err:
-            logging.error(f"Could not connect to MongoDB: {err}")
-            raise
+        self.client = MongoClient(
+                host = host,
+            port = port,
+            serverSelectionTimeoutMS = 3000, # 3 second timeout
+            username = username,
+            password = password,
+        )
+        self.client.server_info()  # Trigger ServerSelectionTimeoutError if cannot connect to MongoDB server
         self.DB = self.client[self.name]
 
     def insert(self, collection_name, documents):
@@ -461,6 +461,60 @@ class Database:
 
             # Replace the old value in column with the new format string
             collection.update_one({"_id": document["_id"]}, {"$set": {output_format: new_format_string}})
+    
+    def generate_pH_corrected_mols(self, collection_name, ph_list, prepare=True):
+        from meeko import MoleculePreparation
+        collection = self.DB[collection_name]
+
+        for document in collection.find():
+            smiles = document['smiles']
+            mol = Chem.MolFromSmiles(smiles)
+            if mol:
+                # generate a list of pkasolver state objects (protonation_states)
+                protonation_states = calculate_microstate_pka_values(mol, only_dimorphite=False)
+                for pH in ph_list:
+                    max_pka = -float('inf')
+                    max_index = None
+                    for i, state in enumerate(protonation_states):
+                        if state.pka >= pH:
+                            max_index = i
+                            break
+                        elif state.pka > max_pka:
+                            max_pka = state.pka
+                            max_index = i
+
+                    # naive implementation of 'most common prot state at pH=x'
+                    ph_corrected_mol = Chem.Mol(protonation_states[max_index].protonated_mol)
+                    ph_corrected_mol = Chem.AddHs(ph_corrected_mol)
+                                
+                    # Embed conformers and store the pickled rdkit obj in mongo
+                    conf_ids = AllChem.EmbedMultipleConfs(ph_corrected_mol, numConfs=200, numThreads=0, pruneRmsThresh=1.5)
+                    pickled_mol = pickle.dumps(mol)
+                    phstr = str(pH*100)
+
+                    update_content = {f'pickled_rdkit_obj_pH_{phstr}': pickled_mol}
+
+                    if prepare:
+                        pdbqt_strings = []
+                        for conf_id in conf_ids:
+                            # Make a copy of the molecule
+                            mol_conf = Chem.Mol(ph_corrected_mol)
+
+                            # Remove all conformers then readd the specific one we want
+                            for id in conf_ids:
+                                mol_conf.RemoveConformer(id)
+                            mol_conf.AddConformer(ph_corrected_mol.GetConformer(conf_id), assignId=True)
+
+                            # Prepare the molecule with Meeko
+                            preparator = MoleculePreparation()
+                            preparator.prepare(mol_conf)
+                            pdbqt_string = preparator.write_pdbqt_string()
+
+                            pdbqt_strings.append(pdbqt_string)
+
+                        update_content[f'pdbqt_conformers_pH_{phstr}'] = pdbqt_strings
+
+                    collection.update_one({'_id': document['_id']}, {'$set': update_content})
 
     import time
     def basic_qvina_analysis_timed(self, collection_name):
@@ -580,54 +634,45 @@ class Database:
             raise ValueError(f"Collection '{collection_name}' does not exist in the database.")
 
         columns = self.explore(show=False)[collection_name]
-        pH_columns = [col for col in columns if col.startswith('pH_')]
+        pH_columns = [col for col in columns if col.startswith('pdbqt_conformers_pH_')]
         collection = self.DB[collection_name]
         documents = collection.find()
 
-        # Create temp files outside of loop
-        with tempfile.NamedTemporaryFile(dir='.', suffix='.mol2', delete=False) as temp:
+        with tempfile.NamedTemporaryFile(dir='.', suffix='.pdbqt', delete=False) as temp:
             temp_path = os.path.basename(temp.name)
 
-        ligand_out_path = temp_path.replace('.mol2', '_out.pdbqt')
+        ligand_out_path = temp_path.replace('.pdbqt', '_out.pdbqt')
 
         for doc in documents:
             qvina_output_dict = {}
             for pH_col in pH_columns:
                 mol2_data = doc[pH_col]
+                conformer_list = list(mol2_data.values())[0]
+                for id, conformer in enumerate(conformer_list):
+                    # Create / overwrite temp file
+                    with open(temp_path, 'w') as temp:
+                        temp.write(conformer)
 
-                # Overwrite temp file
-                with open(temp_path, 'w') as temp:
-                    temp.write(mol2_data)
+                    #mgltools_env = "/usr/local/MGLToolsPckgs/AutoDockTools/Utilities24/"
+                    orrery_env = "/opt/conda/envs/Orrery/bin/qvina2"
+                    config_file = "./example/qvina_example/config.vd"
+                    #receptor_path = "receptor_65.pdbqt"
+                    ligand_path = temp_path
 
-                mgltools_env = "/usr/local/MGLToolsPckgs/AutoDockTools/Utilities24/"
-                orrery_env = "/opt/conda/envs/Orrery/bin/qvina2"
-                config_file = "./example/qvina_example/config.vd"
-                receptor_path = "receptor_65.pdb"
-                ligand_path = temp_path.replace('.mol2', '.pdbqt')
-
-                # Naive process pipeline
-                process = subprocess.Popen(["/bin/bash"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-
-                process.stdin.write(b"source activate mgltools\n")
-                command = f'{mgltools_env}prepare_ligand4.py -l {temp_path}\n'
-                process.stdin.write(command.encode())
-
-                #temporary solution to not repeating the pdbqt each time
-                file_path = os.path.join(os.getcwd(), receptor_path.replace('.pdb', '.pdbqt'))
-                if not os.path.exists(file_path):
-                    command = f'{mgltools_env}prepare_receptor4.py -r {receptor_path}\n'
+                    # Naive process pipeline
+                    process = subprocess.Popen(["/bin/bash"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                    command = f'{orrery_env} --config {config_file} --ligand {ligand_path}\n'
                     process.stdin.write(command.encode())
-                command = f'{orrery_env} --config {config_file} --ligand {ligand_path}\n'
-                process.stdin.write(command.encode())
 
-                process.stdin.flush()
-                stdout, stderr = process.communicate()
+                    process.stdin.flush()
+                    stdout, stderr = process.communicate()
 
-                with open(ligand_out_path, 'r') as f:
-                    ligand_out_data = f.read()
-                molecule = Molecule(smiles=None, input_format='pdbqt', input_data=ligand_out_data)
-                mol2_data = molecule.mol2
-                qvina_output_dict[pH_col] = mol2_data
+                    ligand_out_path = temp_path.replace('.pqdbt', '_out.pdbqt')
+                    with open(ligand_out_path, 'r') as f:
+                        ligand_out_data = f.read()
+                    molecule = Molecule(smiles=None, input_format='pdbqt', input_data=ligand_out_data)
+                    mol2_data = molecule.mol2
+                    qvina_output_dict[str(id)] = mol2_data
 
             collection.update_one({"_id": doc["_id"]}, {"$set": {'qvina_output': qvina_output_dict}})
 

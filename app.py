@@ -84,9 +84,30 @@ def main():
 
 
     # clean the db first  then fetch 1 single item
-    #Abaddon('universe')
-    #fetch_chembl(limit=1, max_pages=1)
+    Abaddon('universe')
+    fetch_chembl(limit=1, max_pages=1)
+    work_db = Database('universe')
+    df = see('universe', 'chembl')
+    print(df['smiles'], '\n\n\n\n')
     
+    # generate pH corrected stuff
+    work_db.generate_pH_corrected_mols('chembl', [7.4])
+    df = see('universe', 'chembl') # db changed so recreate df
+    print(df.columns, '\n\n')
+    result_list = list(df['pdbqt_conformers_pH_740'][0].values())[0]
+    for x, i in enumerate(result_list):
+        print(f'Conformer num {x}:\n\n{i}')
+    
+    # qvina stuff
+    work_db.basic_qvina_analysis('chembl')
+    df = see('universe', 'chembl') # db changed so recreate df
+    print(df.columns)
+    ref = df['qvina_output'][0]
+    print(type(ref)) # dict containing all pH-corrected conformers post-qvina
+    for x,i in ref.items():
+        print(f'Conformer num {x}:\n\n{i}')
+    
+    '''
     # generate a mol2 column that is ph-adjusted by default
     working_db = Database('universe')
     print(f'---Converting the smiles column from the chembl collection to a dict of pH-adjusted mol2 files---')
@@ -99,6 +120,7 @@ def main():
     single_item = chembl_df['qvina_output'][0]
     for pH, qvina_file in single_item.items():
         print(f'pH {pH}:\n{qvina_file}\n\n')
+    '''
     
 if __name__ == "__main__":
     main()
