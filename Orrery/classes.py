@@ -218,7 +218,7 @@ class Database:
         self.client.server_info()  # Trigger ServerSelectionTimeoutError if cannot connect to MongoDB server
         self.DB = self.client[self.name]
 
-    def insert(self, collection_name, documents):
+    def insert_old(self, collection_name, documents):
         """
         Inserts the provided documents into the specified collection.
 
@@ -233,6 +233,35 @@ class Database:
         except errors.BulkWriteError as e:
             #print(e.details['writeErrors'])
             ''
+    def insert(self, collection_name, documents):
+        """
+        Inserts the provided documents into the specified collection, overwriting existing documents with the same index.
+
+        Args:
+        collection_name (str): The name of the collection to insert documents into.
+        documents (list of dict): The documents to be inserted.
+        """
+        collection = self.client[self.name][collection_name]
+        collection.create_index("index", unique=True)
+        try:
+            for doc in documents:
+                collection.update_one({"index": doc["index"]}, {"$set": doc}, upsert=True)
+        except errors.BulkWriteError as e:
+            print(e.details['writeErrors'])
+
+    def exists(self, collection_name, index):
+        """
+        Checks if a document with the specified index exists in the specified collection.
+
+        Args:
+        collection_name (str): The name of the collection.
+        index (str): The index to check.
+
+        Returns:
+        bool: True if the document exists, False otherwise.
+        """
+        collection = self.client[self.name][collection_name]
+        return collection.count_documents({"index": index}) > 0
 
     def explore(self, show=True):
         """
@@ -462,6 +491,7 @@ class Database:
             # Replace the old value in column with the new format string
             collection.update_one({"_id": document["_id"]}, {"$set": {output_format: new_format_string}})
     
+    # double check logic here (!!)
     def generate_pH_corrected_mols(self, collection_name, ph_list, prepare=True):
         from meeko import MoleculePreparation
         collection = self.DB[collection_name]
@@ -472,6 +502,8 @@ class Database:
             if mol:
                 # generate a list of pkasolver state objects (protonation_states)
                 protonation_states = calculate_microstate_pka_values(mol, only_dimorphite=False)
+                # compare each of the molecule's pka with the working pH 
+                # naive implementation of 'most common prot state at pH=x'
                 for pH in ph_list:
                     max_pka = -float('inf')
                     max_index = None
@@ -482,8 +514,6 @@ class Database:
                         elif state.pka > max_pka:
                             max_pka = state.pka
                             max_index = i
-
-                    # naive implementation of 'most common prot state at pH=x'
                     ph_corrected_mol = Chem.Mol(protonation_states[max_index].protonated_mol)
                     ph_corrected_mol = Chem.AddHs(ph_corrected_mol)
                                 
@@ -500,7 +530,7 @@ class Database:
                             # Make a copy of the molecule
                             mol_conf = Chem.Mol(ph_corrected_mol)
 
-                            # Remove all conformers then readd the specific one we want
+                            # Remove all conformers then read the specific one we want
                             for id in conf_ids:
                                 mol_conf.RemoveConformer(id)
                             mol_conf.AddConformer(ph_corrected_mol.GetConformer(conf_id), assignId=True)

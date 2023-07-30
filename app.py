@@ -1,4 +1,4 @@
-from Orrery.chemcollector import fetch_zinc, fetch_chembl, fetch_REAL
+from Orrery.chemcollector import fetch_zinc, fetch_chembl, fetch_REAL, fetch_pdbbind
 from Orrery.mongo_api import see, subsearch
 from Orrery.classes import Database, Molecule
 #import smiles_gaussian
@@ -81,13 +81,21 @@ def main():
     ####################################
     ##### minimal qvina processing #####
     ####################################
-
+    Abaddon('universe')
+    fetch_pdbbind()
+    #input('done?')
 
     # clean the db first  then fetch 1 single item
-    Abaddon('universe')
-    fetch_chembl(limit=1, max_pages=1)
+    #Abaddon('universe')
+    #fetch_chembl(limit=1, max_pages=1)
     work_db = Database('universe')
-    df = see('universe', 'chembl')
+    see('universe')
+    df = see('universe', 'v2020-other-PL')
+    df1 = see('universe', 'refined-set')
+    print(df.columns)
+    print(df1.columns)
+    #work_db.explore()
+    input('aoiushdasd')
     print(df['smiles'], '\n\n\n\n')
     
     # generate pH corrected stuff

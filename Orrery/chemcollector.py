@@ -22,6 +22,7 @@ import shutil
 from rdkit import Chem
 import pickle
 from .classes import Database
+import tarfile
 
 
 def fetch_zinc(rep="3D", since="", db_r="", format="smi",
@@ -346,4 +347,306 @@ def parse_bz2(filename, directory, DB_NAME = 'universe', COLLECTION = 'REAL', re
     print(f'Finished moving {filename} to local database')
     if remove:
         os.remove(filename)
+
+
+def fetch_pdbbind_old(email='samuelmar@gmail.com', pw='J%407iD6i7Lhnugqj'):
+    """"""
+
+    # first we log in
+    login_url = "http://www.pdbbind.org.cn/ajaxcode.php?action=login"
+    payload = {
+        "email": email,
+        "passwd": pw,
+    }
+    session = requests.Session()
+    response = session.post(login_url, data=payload)
+    if response.ok:
+        print("Login to pdbbind successful.")
+    else:
+        print("Login failed. Please check your credentials or the request URL.")
+
+    # now the downloads to local memory
+    download_urls = [
+        "https://pdbbind.oss-cn-hangzhou.aliyuncs.com/download/PDBbind_v2020_other_PL.tar.gz",
+        "https://pdbbind.oss-cn-hangzhou.aliyuncs.com/download/PDBbind_v2020_refined.tar.gz"
+    ]
+
+    # specify the directory for saving the downloaded files
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    save_dir = os.path.join(script_dir, 'pdbbind')
+    os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
+
+    # download files
+    for url in download_urls:
+        file_name = url.split("/")[-1]
+        save_path = os.path.join(save_dir, file_name)
         
+        print(f"Downloading {file_name}...")
+        with session.get(url, stream=True) as response:
+            response.raise_for_status()
+            with open(save_path, 'wb') as out_file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    out_file.write(chunk)
+        print(f"Downloaded {file_name}.")
+
+        print(f"Extracting {file_name}...")
+        with tarfile.open(save_path, 'r:gz') as tar:
+            tar.extractall(path=save_dir)
+        print(f"Extracted {file_name}.")
+
+def fetch_pdbbind(email='samuelmar@gmail.com', pw='J@7iD6i7Lhnugqj', db='universe', collection_name='pdbbind'):
+    import time
+    import csv
+    db = Database(db)
+    # first we log in
+    login_url = "http://www.pdbbind.org.cn/ajaxcode.php?action=login"
+    payload = {
+        "email": email,
+        "passwd": pw,
+    }
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1',
+        'Referer': 'http://www.pdbbind.org.cn/index.php',
+        'X-Requested-With': 'XMLHttpRequest',
+    }
+
+    session = requests.Session()
+    session.headers.update(headers)
+    response = session.post(login_url, data=payload)
+    #print(f"Login response: {response.text}")
+    response_content = response.json()
+    if response_content.get('status') == 'success':
+        print("Login to pdbbind successful.")
+    else:
+        print(f"Login failed. Server response: {response_content.get('message')}")
+        return
+
+
+    # now the downloads to local memory
+    download_urls = [
+        "https://pdbbind.oss-cn-hangzhou.aliyuncs.com/download/PDBbind_v2020_other_PL.tar.gz",
+        "https://pdbbind.oss-cn-hangzhou.aliyuncs.com/download/PDBbind_v2020_refined.tar.gz"
+    ]
+
+    # specify the directory for saving the downloaded files
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    save_dir = os.path.join(script_dir, 'pdbbind')
+    os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
+
+    block_size = 8192
+    # download files
+    for url in download_urls:
+        file_name = url.split("/")[-1]
+        save_path = os.path.join(save_dir, file_name)
+
+        # Check if the file already exists and get the already downloaded size
+        if os.path.exists(save_path):
+            initial_pos = os.path.getsize(save_path)
+        else:
+            initial_pos = 0
+        
+       # Retry download if connection breaks
+        retry_counter = 0
+        while retry_counter < 100:
+            try:
+                print(f"Downloading {file_name}...")
+
+                # Resume download if the file already exists
+                resume_header = {'Range': f'bytes={initial_pos}-'} if initial_pos else None
+                response = session.get(url, headers=resume_header, stream=True)
+                if response.status_code not in [200, 206]:  # 200: OK, 206: Partial Content
+                    print(f"Download response: {response.status_code}")
+                    response.raise_for_status()
+
+                # Get the total size
+                if response.status_code == 206:  # Partial Content
+                    content_range = response.headers.get('content-range')
+                    total_size = int(content_range.split('/')[-1])  # Get the total size from the Content-Range header
+                else:
+                    total_size = int(response.headers.get('content-length', 0))
+
+                # If the existing file's size is equal to or larger than total_size, skip the download
+                if initial_pos >= total_size:
+                    print(f"{file_name} is already downloaded.")
+                    break
+
+                t = tqdm(total=total_size, initial=initial_pos, unit='iB', unit_scale=True)
+
+                # Write to the file
+                with open(save_path, 'ab' if initial_pos else 'wb') as out_file:
+                    for data in response.iter_content(block_size):
+                        t.update(len(data))
+                        out_file.write(data)
+                t.close()
+
+                # Verifying downloaded size
+                if os.path.getsize(save_path) != total_size:
+                    print("ERROR, something went wrong in the downloading process")
+
+                print(f"Downloaded {file_name}.")
+                break  # exit the while loop
+
+            except (requests.exceptions.RequestException, requests.exceptions.ChunkedEncodingError) as e:
+                print(f"Error occurred while downloading {file_name}: {str(e)}")
+                retry_counter += 1
+                print(f"Retry attempt: {retry_counter}")
+                if os.path.exists(save_path):
+                    initial_pos = os.path.getsize(save_path)
+                time.sleep(5)  # backoff time before retrying
+
+    ############ AFTER DOWNLOADING, PARSE THEN SEND TO LOCAL DB ############
+
+    extract = False # line for debugging purposes
+    if extract:
+        # Loop over all tar files in the directory
+        for tar_filename in os.listdir(save_dir):
+            print(f'Decompressing file: {tar_filename}, this can take a while...')
+            if tar_filename.endswith('.tar.gz'):
+                # Extract the tar file
+                tar_filepath = os.path.join(save_dir, tar_filename)
+                tar = tarfile.open(tar_filepath)
+                tar.extractall(path=save_dir)
+                tar.close()
+
+    insert = True # another line for debugging
+    if insert:
+        excluded_folders = ['readme']
+        file_types = ['.mol2', '.sdf', '.pdb', '.2020']
+        used_collections = []
+        print('Organizing extracted data, this can take a while...')
+        for item in os.listdir(save_dir):
+            item_path = os.path.join(save_dir, item)
+            # check if the item is a directory
+            if os.path.isdir(item_path):
+                folder_path = item_path
+                print(f'Organizing: {folder_path}')
+                collection_name = item
+                used_collections.append(collection_name) # save collection names for .2020 files data extracting later
+                documents = [] # new list of docs for each collection
+                indexinfo = [] # empty list to hold contents of index files
+                # Loop over all subfolders (each representing an index)
+                for index_name in tqdm(os.listdir(folder_path)):
+                    if index_name not in excluded_folders:
+                        index_path = os.path.join(folder_path, index_name)
+
+                        if index_name != 'index':
+                            # Prepare a document for this index
+                            document = {"index": index_name}
+
+                        # Loop over all files in the subfolder
+                        for filename in os.listdir(index_path):
+                            file_path = os.path.join(index_path, filename)
+                            file_ext = os.path.splitext(filename)[1]
+
+                            # If it's not a file or not the file type we are interested in, skip
+                            if not os.path.isfile(file_path) or file_ext not in file_types:
+                                continue
+                            
+                            with open(file_path, 'r') as f:
+                                file_content = f.read()
+  
+                            # Add file content to the document under appropriate key
+                            if file_ext == '.mol2':
+                                document['mol2'] = file_content
+                            elif file_ext == '.sdf':
+                                document['sdf'] = file_content
+                            elif '_pocket.pdb' in filename:
+                                document['pocket pdb'] = file_content
+                            elif '_protein.pdb' in filename:
+                                document['protein pdb'] = file_content
+                            elif file_ext == '.2020':
+                                indexinfo.append(file_content)
+                        if index_name != 'index':
+                            documents.append(document)
+
+                # Insert all documents from single tar.gz file into relative MongoDB collection
+                print(f'Inserting data into the {collection_name} mongo collection...')
+                db.insert(collection_name, documents)
+
+        print(f'Collecting additional data from .2020 index files...')
+        # now for the extra data in the index files
+        data = {}
+        for file2020 in indexinfo:
+            # grab only column names from header
+            header_line = re.search(r'# PDB code(.*?)\n', file2020).group(1)
+            header_line = 'PDB code' + header_line
+            column_names = [word.strip() for word in header_line.split(',')]
+            column_names.append('extra info') # gotta add this manually because pdbbind is so well made by super smart people
+
+            # Check if we have either 'binding data' or 'Kd/Ki' in column_names
+            target_column_names = ['binding data', 'Kd/Ki']
+            target_column_index = None
+            for target in target_column_names:
+                if target in column_names:
+                    target_column_index = column_names.index(target)
+                    break
+
+            # grab everything but header
+            all_lines = file2020.split('\n')
+            data_lines = [line for line in all_lines if not line.startswith('#') and line.strip() != '']
+            for line in data_lines:
+                # each row must be manually parsed because the people at pdbbind are great and intelligent
+                line = line.replace('//', '').strip()
+                parts = line.split()
+
+                # Split the 'binding data' or 'Kd/Ki' into 'standard type', 'standard relation' and 'standard value' only if the column exists
+                if target_column_index is not None:
+                    if '=' in parts[target_column_index]:
+                        standard_type, standard_value = parts[target_column_index].split('=')
+                        standard_relation = '='
+                    elif '>' in parts[target_column_index]:
+                        standard_type, standard_value = parts[target_column_index].split('>')
+                        standard_relation = '>'
+                    elif '<' in parts[target_column_index]:
+                        standard_type, standard_value = parts[target_column_index].split('<')
+                        standard_relation = '<'
+                    else:
+                        standard_type = parts[target_column_index]
+                        standard_relation = 'NA'
+                        standard_value = 'NA'
+                    parts[target_column_index] = standard_type
+                    parts.insert(target_column_index + 1, standard_relation)
+                    parts.insert(target_column_index + 2, standard_value)
+
+                    # Update column_names to accommodate the new columns
+                    column_names[target_column_index] = 'standard type'
+                    column_names.insert(target_column_index + 1, 'standard relation')
+                    column_names.insert(target_column_index + 2, 'standard value')
+
+                # assign column values to column names
+                row = {column_names[i]: value for i, value in enumerate(parts[:len(column_names) - 1])}
+
+                # If there is extra info, join it into a single string and add it to the dictionary
+                if len(parts) > len(column_names) - 1:
+                    row['extra info'] = ' '.join(parts[len(column_names) - 1:])
+
+                # Add the row to the data dictionary, using the PDB code as the key
+                pdb_code = row['PDB code']
+                data[pdb_code] = row
+
+        # reshape additional .2020 data to fit mongo standards, then send to mongo
+        documents = [{"index": k, **v} for k, v in data.items()]
+
+        ghost_indexes = []  # list to hold ghost indexes
+        print('Sending data to local mongo db...')
+        for document in tqdm(documents):
+            index_found = False
+            for collection_name in used_collections:
+                # check if the index exists in the collection
+                if db.exists(collection_name, document['index']):
+                    db.insert(collection_name, [document])  # update the document
+                    index_found = True
+                    break  # no need to check other collections
+            if not index_found:
+                ghost_indexes.append(document['index'])  # save ghost index
+
+        # print out ghost indexes if any
+        #if ghost_indexes:
+            #print('Ghost indexes found:', ghost_indexes)
+            
+
+
+
+
+
+    
