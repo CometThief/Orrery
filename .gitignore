@@ -1,0 +1,17 @@
+
+
+# Folders
+/.git/
+Orrery/__pycache__/
+mongodata/
+temp/
+tranches/
+example/
+docking/
+docker_files/python/installer_files/
+Orrery/pdbbind/
+
+
+# Files
+.todo.text
+.qvina.sh
